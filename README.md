@@ -1,4 +1,4 @@
-# FusionTransCPI
+# FOTF-CPI
 
 ## Datasets
 
