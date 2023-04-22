@@ -107,7 +107,6 @@ class BIN_Interaction_Flat(nn.Sequential):
         p_aug = torch.unsqueeze(p_encoded_layers, 1).repeat(1, self.max_d, 1, 1)  # repeat along drug size
         # print(p_aug.shape)
 
-
         affinity_matrix = torch.matmul(d_encoded_layers, p_encoded_layers.transpose(-1, -2))
 
         affinity_scores = affinity_matrix / math.sqrt(12)
@@ -139,9 +138,6 @@ class BIN_Interaction_Flat(nn.Sequential):
 
         score = self.decoder(fusion_emb)
         #  print("----------------------------------------")
-
-
-
         return score
 
     # help classes

@@ -16,20 +16,20 @@ np.random.seed(3)
 from argparse import ArgumentParser
 from config import BIN_config_DBPE
 from models import BIN_Interaction_Flat
-from stream_fragement import BIN_Data_Encoder
+from stream import BIN_Data_Encoder
 
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda:0" if use_cuda else "cpu")
 
 parser = ArgumentParser(description='MolTrans Training.')
-parser.add_argument('-b', '--batch-size', default=32, type=int,
+parser.add_argument('-b', '--batch-size', default=64, type=int,
                     metavar='N',
                     help='mini-batch size (default: 16), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
 parser.add_argument('-j', '--workers', default=0, type=int, metavar='N',
                     help='number of data loading workers (default: 0)')
-parser.add_argument('--epochs', default=40, type=int, metavar='N',
+parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--task', choices=['biosnap', 'bindingdb', 'davis'],
                     default='', type=str, metavar='TASK',
@@ -45,6 +45,12 @@ def get_task(task_name):
         return './dataset/BindingDB'
     elif task_name.lower() == 'davis':
         return './dataset/DAVIS'
+    elif task_name.lower() == 'hybrid_data':
+        return './dataset/Hybrid_data'
+    elif task_name.lower() == 'dud_e':
+        return './dataset/DUD_E'
+    elif task_name.lower() == 'dude':
+        return './dataset/DUDE'
 
 
 def test(data_generator, model):
@@ -68,7 +74,6 @@ def test(data_generator, model):
         m = torch.nn.Sigmoid()
         logits = torch.squeeze(m(score))
         loss_fct = torch.nn.BCELoss()
-        # print("fuck")
 
         label = Variable(torch.from_numpy(np.array(label)).float()).cuda()
 
@@ -78,20 +83,18 @@ def test(data_generator, model):
         count += 1
 
         logits = logits.detach().cpu().numpy()
-        # print("fuck")
 
         label_ids = label.to('cpu').numpy()
         y_label = y_label + label_ids.flatten().tolist()
         y_pred = y_pred + logits.flatten().tolist()
 
-    # print("??!!")
     loss = loss_accumulate / count
-    # print("??!!")
     # print(y_pred)
 
     fpr, tpr, thresholds = roc_curve(y_label, y_pred)
+    # print(thresholds)
 
-    precision = tpr/(tpr + fpr)
+    precision = tpr / (tpr + fpr)
     # print(precision)
 
     f1 = 2 * precision * tpr / (tpr + precision + 0.00001)
@@ -129,17 +132,16 @@ def test(data_generator, model):
                                                                                      outputs), y_pred, loss.item(), y_label
 
 
-# def save_model_dict(model, model_dir, msg):
-#     model_path = os.path.join(model_dir, msg + '.pt')
-#     torch.save(model.state_dict(), model_path)
-#     print("model has been saved to %s." % (model_path))
+def save_model_dict(model, model_dir, msg):
+    model_path = os.path.join(model_dir, msg + '.pt')
+    torch.save(model.state_dict(), model_path)
+    print("model has been saved to %s." % (model_path))
 
 
 def main():
     config = BIN_config_DBPE()
     args = parser.parse_args()
     config['batch_size'] = args.batch_size
-
 
     loss_history = []
 
@@ -158,27 +160,28 @@ def main():
               'num_workers': 0,
               'drop_last': True}
 
-    task = "biosnap"
-
+    task = config["dataset_name"]
+    # task = "BindingDB"
     dataFolder = get_task(task)
+    print(dataFolder)
 
     df_train = pd.read_csv(dataFolder + '/train_split.csv')
-    df_val = pd.read_csv(dataFolder + '/val.csv')
+    df_val = pd.read_csv(dataFolder + '/test_split.csv')
     df_test = pd.read_csv(dataFolder + '/test_split.csv')
 
     # print(df_train)
     # print(df_train.Label.values)
 
-    training_set = BIN_Data_Encoder(df_train.index.values, df_train.Label.values, df_train, 'train')
+    training_set = BIN_Data_Encoder(df_train.index.values, df_train.Label.values, df_train)
     training_generator = data.DataLoader(training_set, **params)
 
-    validation_set = BIN_Data_Encoder(df_val.index.values, df_val.Label.values, df_val, 'val')
+    validation_set = BIN_Data_Encoder(df_val.index.values, df_val.Label.values, df_val)
     print(validation_set.df.keys())
 
     validation_generator = data.DataLoader(validation_set, **params)
     print(validation_generator.dataset)
 
-    testing_set = BIN_Data_Encoder(df_test.index.values, df_test.Label.values, df_test, 'test')
+    testing_set = BIN_Data_Encoder(df_test.index.values, df_test.Label.values, df_test)
     testing_generator = data.DataLoader(testing_set, **params)
 
     # # early stopping
@@ -212,16 +215,20 @@ def main():
 
         # every epoch test
         with torch.set_grad_enabled(False):
-            auc, auprc, f1, logits, loss, label = test(validation_generator, model)
+            auc, auprc, f1, logits, loss, label = test(testing_generator, model)
             if auc > max_auc:
                 model_max = copy.deepcopy(model)
                 max_auc = auc
-            print('Validation at Epoch ' + str(epo + 1) + ' , AUROC: ' + str(auc) + ' , AUPRC: ' + str(
-                auprc) + ' , F1: ' + str(f1))
+                print('Validation at Epoch ' + str(epo + 1) + ' , AUROC: ' + str(auc) + ' , AUPRC: ' + str(
+                    auprc) + ' , F1: ' + str(f1))
+                with open(dataFolder + '/Label_best.pickle', 'wb') as f:
+                    pickle.dump(label, f)
+                with open(dataFolder + '/Pre_Label_best.pickle', 'wb') as f:
+                    pickle.dump(logits, f)
 
     # model save
 
-    # save_model_dict(model, dataFolder, task)
+    save_model_dict(model_max, dataFolder, task)
 
     print('--- Go for Testing ---')
     try:
@@ -243,3 +250,7 @@ s = time()
 main()
 e = time()
 print(e - s)
+
+# 2750/766
+
+# 123/545
